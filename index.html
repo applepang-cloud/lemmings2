@@ -76,9 +76,9 @@
 
   <div id="hud">
     <div class="stats">
-      <span class="stat">남음 <b id="sOut">0</b></span>
-      <span class="stat">구출 <b id="sIn">0</b></span>
       <span class="stat">목표 <b id="sNeed">0</b></span>
+      <span class="stat">남은레밍 <b id="sOut">0</b></span>
+      <span class="stat">구출 <b id="sIn">0</b></span>
       <span class="stat">전체 <b id="sTot">0</b></span>
       <span class="stat">시간 <b id="sTime">0:00</b></span>
       <span class="stat">속도 <b id="sRate">0</b></span>
@@ -91,6 +91,7 @@
       <button class="btn" id="bRateUp">속도 +</button>
       <button class="btn" id="bPause">일시정지</button>
       <button class="btn" id="bFF">빨리감기</button>
+      <button class="btn" id="bMute">🔊 소리</button>
       <button class="btn warn" id="bNuke">전체폭파</button>
     </div>
     <div class="hint" id="hint">스킬 버튼 선택 → 화면의 레밍을 탭 / 클릭</div>
@@ -109,6 +110,42 @@ const MAX_STEP=5;            // 걸을 때 올라갈 수 있는 높이
 const MAX_DESC=4;            // 걸을 때 내려갈 수 있는 높이
 const LH=9, LWd=4;           // 레밍 몸 높이/폭(논리px)
 const TAP_R=42;              // 탭 허용 반경(논리px) — 작은 레밍을 쉽게 선택
+
+//==================== 사운드 (Web Audio, 외부파일 없음) ====================
+const Sound=(function(){
+  let ctx=null, muted=false;
+  const last={};
+  function ac(){ if(!ctx){ try{ ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ ctx=null; } } return ctx; }
+  function resume(){ const c=ac(); if(c && c.state==='suspended') c.resume(); }
+  function tone(freq,dur,type,vol,when){ const c=ac(); if(!c||muted) return;
+    const t=c.currentTime+(when||0); const o=c.createOscillator(), g=c.createGain();
+    o.type=type||'square'; o.frequency.setValueAtTime(freq,t);
+    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol||0.2,t+0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.connect(g).connect(c.destination); o.start(t); o.stop(t+dur+0.03);
+  }
+  function noise(dur,vol){ const c=ac(); if(!c||muted) return;
+    const n=Math.max(1,c.sampleRate*dur|0), buf=c.createBuffer(1,n,c.sampleRate), d=buf.getChannelData(0);
+    for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,2);
+    const s=c.createBufferSource(); s.buffer=buf; const g=c.createGain(); g.gain.value=vol||0.3;
+    s.connect(g).connect(c.destination); s.start();
+  }
+  const SFX={
+    select:()=>tone(880,0.05,'square',0.10),
+    assign:()=>{ tone(620,0.06,'square',0.16); tone(950,0.07,'square',0.12,0.05); },
+    save:()=>{ tone(784,0.09,'sine',0.20); tone(1175,0.13,'sine',0.18,0.08); },
+    splat:()=>{ noise(0.16,0.22); tone(110,0.16,'sawtooth',0.14); },
+    explode:()=>{ noise(0.28,0.35); tone(70,0.28,'sawtooth',0.22); },
+    doom:()=>{ tone(330,0.5,'sawtooth',0.18); tone(160,0.7,'sawtooth',0.18,0.18); },
+    win:()=>[523,659,784,1047].forEach((f,i)=>tone(f,0.18,'square',0.16,i*0.12)),
+    lose:()=>[392,330,262,196].forEach((f,i)=>tone(f,0.22,'triangle',0.18,i*0.14))
+  };
+  function play(name){ if(muted) return; const now=(typeof performance!=='undefined'?performance.now():Date.now());
+    if(last[name] && now-last[name]<45) return;       // 동시 다발 방지
+    last[name]=now; try{ SFX[name] && SFX[name](); }catch(e){} }
+  function toggle(){ muted=!muted; if(!muted) resume(); return muted; }
+  return { play, resume, toggle, isMuted:()=>muted };
+})();
 
 //==================== 캔버스 ====================
 const cv=document.getElementById('game');
@@ -228,14 +265,14 @@ const LEVELS=[
  },
  {
    name:"Tailor-made for blockers",   // 원작 Fun 3
-   blurb:"양옆은 낭떠러지! 차단꾼(BLOCK)으로 막아 출구 쪽으로 모으세요.",
+   blurb:"레밍이 오른쪽 낭떠러지로 곧장 걸어가요! 차단꾼(BLOCK)으로 막아 돌려세워 왼쪽 출구로 보내세요.",
    total:50, need:5, rate:50, time:300,
-   entrance:{x:120,y:34}, exit:{x:248,y:100,w:16,h:22},
+   entrance:{x:150,y:34}, exit:{x:32,y:100,w:16,h:22},
    skills:{blocker:10},
    build(){
-     // 허공에 떠 있는 대지 — 왼쪽 끝으로 걸어 나가면 추락사
-     fillTerrain(40,120,232,12,DIRT);
-     fillTerrain(40,120,232,3,GRASS);
+     // 허공에 떠 있는 대지 — 오른쪽 끝으로 걸어 나가면 추락사. 출구는 왼쪽 끝.
+     fillTerrain(24,120,240,12,DIRT);
+     fillTerrain(24,120,240,3,GRASS);
    }
  },
  {
@@ -327,6 +364,7 @@ const SKILL_LIST=[
 let lvIndex=0, level, lemmings, counts, releaseRate, timeLeft, spawnedCount, savedCount, deadCount;
 let selectedSkill=null, paused=false, fastFwd=false, running=false;
 let spawnTimer=0, tickAcc=0, nuking=false, nukeTimer=0, gameOver=false;
+let doomed=false, doomTimer=0;   // 패배 확정 시 전멸(떨림→폭파) 연출
 
 function startLevel(i){
   lvIndex=i; level=LEVELS[i];
@@ -341,7 +379,7 @@ function startLevel(i){
   timeLeft=level.time;
   spawnedCount=0; savedCount=0; deadCount=0;
   selectedSkill=null; paused=false; fastFwd=false; nuking=false; nukeTimer=0;
-  spawnTimer=0; tickAcc=0; gameOver=false; running=true;
+  spawnTimer=0; tickAcc=0; gameOver=false; running=true; doomed=false; doomTimer=0;
   buildSkillUI();
   hideOverlay();
   updateHUD();
@@ -362,7 +400,8 @@ function spawnLemming(){
 function killLem(l, splat){
   if(!l.alive) return;
   l.alive=false; l.state=splat?'SPLAT':'GONE'; l.work=splat?12:0;
-  if(!splat) deadCount++; else deadCount++;
+  deadCount++;
+  if(splat) Sound.play('splat');
 }
 
 // 한 마리 물리 업데이트
@@ -380,6 +419,7 @@ function updateLem(l){
       if(l.bombT<=0){
         clearCircle(l.x, l.y-3, 11);
         l.alive=false; l.state='GONE'; l.dead=true; deadCount++;
+        Sound.play('explode');
         return;
       }
     }
@@ -404,6 +444,7 @@ function updateLem(l){
     const e=level.exit;
     if(l.x>=e.x-2 && l.x<=e.x+e.w+2 && l.y>=e.y && l.y<=e.y+e.h+4){
       l.alive=false; l.saved=true; l.state='GONE'; l.dead=true; savedCount++;
+      Sound.play('save');
     }
   }
 }
@@ -425,7 +466,7 @@ function landCheck(l){
     while(isSolid(l.x,l.y)) l.y--;
     if(l.fallDist>SAFE_FALL && !l.isFloater){ killLem(l,true); }
     else { l.state='WALK'; l.fallDist=0; }
-  } else if(l.y>=H){ l.alive=false; l.state='GONE'; l.dead=true; deadCount++; }
+  } else if(l.y>=H){ l.alive=false; l.state='GONE'; l.dead=true; deadCount++; Sound.play('splat'); }
 }
 function landCheckFloat(l){
   if(isSolid(l.x,l.y) || isSolid(l.x,l.y+1)){
@@ -603,6 +644,7 @@ function canvasToLogical(ev){
 let lastTap=0;
 function handleTap(ev){
   ev.preventDefault();
+  Sound.resume();   // 첫 사용자 입력에서 오디오 활성화(브라우저 정책)
   const now=(typeof performance!=='undefined'?performance.now():Date.now());
   if(now-lastTap<320) return;   // touchstart 직후의 click 중복 방지
   lastTap=now;
@@ -620,6 +662,7 @@ function handleTap(ev){
   if(best && bd<=FALLBACK*FALLBACK){
     assign(best,selectedSkill);
     best.flash=14;                 // 부여 피드백(흰 링)
+    Sound.play('assign');
     counts[selectedSkill]--;
     if(counts[selectedSkill]<=0) selectedSkill=null;
     buildSkillUI(); updateHUD();
@@ -639,6 +682,7 @@ function buildSkillUI(){
     div.innerHTML=`<div class="nm">${nm}</div><div class="ct">${c}</div>`;
     div.onclick=()=>{
       if(c<=0) return;
+      Sound.resume(); Sound.play('select');
       selectedSkill = selectedSkill===key?null:key;
       buildSkillUI();
     };
@@ -647,7 +691,10 @@ function buildSkillUI(){
 }
 function fmtTime(s){ s=Math.max(0,s|0); return (s/60|0)+':'+String(s%60).padStart(2,'0'); }
 function updateHUD(){
-  document.getElementById('sOut').textContent = spawnedCount - savedCount - deadCount;
+  const remaining = level.total - deadCount;   // 아직 잃지 않은 레밍(구출+생존)
+  const out=document.getElementById('sOut');
+  out.textContent = remaining;
+  out.style.color = (remaining<=level.need) ? 'var(--danger)' : 'var(--accent2)';  // 여유가 없으면 경고색
   document.getElementById('sIn').textContent = savedCount;
   document.getElementById('sNeed').textContent = level.need;
   document.getElementById('sTot').textContent = level.total;
@@ -662,8 +709,10 @@ document.getElementById('bRateUp').onclick=()=>{ releaseRate=Math.min(99,release
 document.getElementById('bRateDown').onclick=()=>{ releaseRate=Math.max(10,releaseRate-5); updateHUD(); };
 document.getElementById('bPause').onclick=(e)=>{ paused=!paused; e.target.textContent=paused?'재개':'일시정지'; };
 document.getElementById('bFF').onclick=(e)=>{ fastFwd=!fastFwd; e.target.style.borderColor=fastFwd?'#54d06e':''; };
+document.getElementById('bMute').onclick=(e)=>{ const m=Sound.toggle(); e.target.textContent=m?'🔇 음소거':'🔊 소리'; e.target.style.borderColor=m?'':'#54d06e'; };
 document.getElementById('bNuke').onclick=()=>{
   if(gameOver) return;
+  Sound.resume();
   nuking=true; nukeTimer=0;
 };
 
@@ -673,6 +722,7 @@ function showOverlay(win){
   running=false; gameOver=true;
   const ok = savedCount>=level.need;
   const last = lvIndex>=LEVELS.length-1;
+  Sound.play(ok?'win':'lose');
   ov.className='msg show '+(ok?'win':'lose');
   let html=`<h2>${ok?'성공!':'실패'}</h2>`;
   html+=`<p class="big">구출 ${savedCount} / 목표 ${level.need} (전체 ${level.total})</p>`;
@@ -695,17 +745,28 @@ function tick(){
   // 시간
   timeLeft -= 1/30;
 
-  // 폭파 가동
+  // 패배 확정 체크: 아직 잃지 않은 레밍(전체-사망)이 목표보다 적으면 더는 이길 수 없으므로
+  // 모든 레밍이 떨다가 폭파되는 전멸 연출 후 게임오버. (구출한 레밍은 이미 목표에 반영됨)
+  const remaining = level.total - deadCount;
+  if(!doomed && !nuking && remaining < level.need){
+    doomed=true; doomTimer=26; Sound.play('doom');
+  }
+  if(doomed && doomTimer>0){
+    doomTimer--;
+    if(doomTimer===0){ nuking=true; }   // 떨림이 끝나면 폭파 시작
+  }
+
+  // 폭파 가동(전체폭파 버튼 또는 패배 연출)
   if(nuking){
     nukeTimer++;
-    if(nukeTimer%3===0){
+    if(nukeTimer%2===0){
       const target=lemmings.find(l=>l.alive && l.bombT===0);
       if(target){ target.bombT=1; target.anim=29; }
     }
   }
 
-  // 생성
-  if(spawnedCount<level.total){
+  // 생성 — 폭파/패배연출 중에는 멈춤(생성 도중 폭파되어 깜빡 나타났다 사라지는 버그 방지)
+  if(!nuking && !doomed && spawnedCount<level.total){
     spawnTimer--;
     if(spawnTimer<=0){
       spawnLemming();
@@ -718,10 +779,10 @@ function tick(){
   // 정리
   lemmings=lemmings.filter(l=> !l.dead);
 
-  // 종료 조건
+  // 종료 조건 — 폭파/패배연출 중에는 미생성 레밍을 기다리지 않고 화면이 비면 종료
   const active = lemmings.some(l=>l.alive);
-  const allDone = spawnedCount>=level.total && !active;
-  if(allDone || timeLeft<=0){
+  const allAccounted = spawnedCount>=level.total || nuking || doomed;
+  if((allAccounted && !active) || timeLeft<=0){
     showOverlay();
     return;
   }
@@ -793,7 +854,13 @@ function render(){
 }
 
 function drawLem(l){
-  const x=l.x|0, y=l.y|0;
+  // 전멸 연출(패배 확정 떨림) 또는 폭파 카운트다운 중에는 부들부들 떨림
+  let jx=0, jy=0;
+  if((doomed && doomTimer>0) || l.bombT>0){
+    jx=(Math.random()<0.5?-1:1);
+    jy=(Math.random()<0.4?-1:0);
+  }
+  const x=(l.x|0)+jx, y=(l.y|0)+jy;
   // 부여 피드백: 흰 링
   if(l.flash>0){
     ctx.strokeStyle='rgba(255,255,255,'+(l.flash/14)+')';
@@ -858,9 +925,11 @@ window.__LEM = {
   setFF(v){ fastFwd=!!v; },
   step(n){ n=n||1; let c=0; for(let i=0;i<n && !gameOver;i++){ tick(); c++; } return c; }, // 동기 틱(테스트)
   draw(){ render(); },   // 강제 렌더(테스트)
+  nuke(){ nuking=true; nukeTimer=0; },   // 전체폭파 트리거(테스트)
   isSolid(x,y){ return isSolid(x,y); },
   info(){ return {lv:lvIndex, name:level.name, need:level.need, total:level.total,
     spawned:spawnedCount, saved:savedCount, dead:deadCount, over:gameOver,
+    doomed:doomed, doomTimer:doomTimer, nuking:nuking,
     exit:level.exit, entrance:level.entrance, counts:Object.assign({},counts)}; },
   lems(){ return lemmings.filter(l=>l.alive).map(l=>({x:Math.round(l.x),y:Math.round(l.y),s:l.state,
     dir:l.dir,cl:l.isClimber,fl:l.isFloater})); },
