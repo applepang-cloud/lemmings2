@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Lemmings</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#11182e; --panel2:#1a2342; --ink:#e8eefc;
+    --accent:#54d06e; --accent2:#3fa9ff; --danger:#ff5560; --muted:#7d89ad;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;}
+  body{
+    background:radial-gradient(1200px 600px at 50% -10%,#16203f,#070b16 60%);
+    color:var(--ink); font-family:ui-monospace,Menlo,Consolas,monospace;
+    display:flex; flex-direction:column; align-items:center; min-height:100%;
+    padding:8px; gap:8px;
+  }
+  h1{font-size:15px;letter-spacing:3px;margin:2px 0 0;color:var(--accent);text-transform:uppercase;}
+  .sub{font-size:11px;color:var(--muted);margin-bottom:2px;}
+  #stage{
+    width:fit-content; max-width:100%; position:relative; margin:0 auto;
+    border:2px solid #2a355e; border-radius:8px; overflow:hidden;
+    background:#0a0f1e; box-shadow:0 10px 40px rgba(0,0,0,.5);
+  }
+  canvas{display:block;margin:0 auto;image-rendering:pixelated;touch-action:none;background:#0a0f1e;}
+  /* HUD */
+  #hud{width:100%;max-width:960px;display:flex;flex-direction:column;gap:6px;}
+  .stats{
+    display:flex;flex-wrap:wrap;gap:6px;justify-content:space-between;
+    background:var(--panel);border:1px solid #283358;border-radius:8px;padding:7px 9px;font-size:12px;
+  }
+  .stat b{color:var(--accent2);}
+  .skills{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;}
+  @media(min-width:560px){.skills{grid-template-columns:repeat(8,1fr);}}
+  .sk{
+    background:var(--panel2);border:1px solid #2c3a66;border-radius:7px;
+    padding:6px 2px;text-align:center;cursor:pointer;user-select:none;position:relative;
+    transition:transform .05s, border-color .1s;
+  }
+  .sk:active{transform:scale(.95);}
+  .sk.on{border-color:var(--accent);background:#1d3326;box-shadow:0 0 0 2px rgba(84,208,110,.3) inset;}
+  .sk .nm{font-size:10px;color:#cdd6f0;line-height:1.1;}
+  .sk .ct{font-size:13px;font-weight:bold;color:var(--accent2);}
+  .sk.empty{opacity:.35;pointer-events:none;}
+  .ctrls{display:flex;gap:5px;flex-wrap:wrap;}
+  .btn{
+    flex:1;min-width:64px;background:var(--panel2);border:1px solid #2c3a66;color:var(--ink);
+    border-radius:7px;padding:8px 6px;font-family:inherit;font-size:12px;cursor:pointer;
+  }
+  .btn:active{transform:scale(.97);}
+  .btn.warn{border-color:var(--danger);color:#ffb7bc;}
+  .msg{
+    position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;
+    background:rgba(6,10,22,.86);text-align:center;padding:20px;z-index:5;
+  }
+  .msg.show{display:flex;}
+  .msg h2{margin:0 0 6px;font-size:22px;letter-spacing:2px;}
+  .msg p{margin:4px 0;font-size:13px;color:#c6d0ea;max-width:380px;}
+  .msg .big{font-size:13px;color:var(--accent);}
+  .msg button{margin-top:14px;background:var(--accent);color:#05210d;border:none;
+    padding:11px 22px;border-radius:8px;font-family:inherit;font-weight:bold;font-size:14px;cursor:pointer;}
+  .win h2{color:var(--accent);} .lose h2{color:var(--danger);}
+  .hint{font-size:11px;color:var(--muted);text-align:center;}
+</style>
+</head>
+<body>
+  <h1>Lemmings</h1>
+  <div class="sub">능력을 고르고 레밍을 탭해 출구로 인도하세요</div>
+
+  <div id="stage">
+    <canvas id="game"></canvas>
+    <div id="overlay" class="msg"></div>
+  </div>
+
+  <div id="hud">
+    <div class="stats">
+      <span class="stat">남음 <b id="sOut">0</b></span>
+      <span class="stat">구출 <b id="sIn">0</b></span>
+      <span class="stat">목표 <b id="sNeed">0</b></span>
+      <span class="stat">전체 <b id="sTot">0</b></span>
+      <span class="stat">시간 <b id="sTime">0:00</b></span>
+      <span class="stat">속도 <b id="sRate">0</b></span>
+    </div>
+
+    <div class="skills" id="skills"></div>
+
+    <div class="ctrls">
+      <button class="btn" id="bRateDown">속도 –</button>
+      <button class="btn" id="bRateUp">속도 +</button>
+      <button class="btn" id="bPause">일시정지</button>
+      <button class="btn" id="bFF">빨리감기</button>
+      <button class="btn warn" id="bNuke">전체폭파</button>
+    </div>
+    <div class="hint" id="hint">스킬 버튼 선택 → 화면의 레밍을 탭 / 클릭</div>
+  </div>
+
+<script>
+"use strict";
+(function(){
+//==================== 설정 ====================
+const W=320, H=180;          // 논리 해상도
+const TICK=1000/30;          // 로직 30Hz
+const GRAVITY_SPEED=2;       // 낙하 px/tick
+const FLOAT_SPEED=1;
+const SAFE_FALL=140;         // 이보다 높이 떨어지면 사망(입구 낙하는 안전)
+const MAX_STEP=5;            // 걸을 때 올라갈 수 있는 높이
+const MAX_DESC=4;            // 걸을 때 내려갈 수 있는 높이
+const LH=9, LWd=4;           // 레밍 몸 높이/폭(논리px)
+const TAP_R=42;              // 탭 허용 반경(논리px) — 작은 레밍을 쉽게 선택
+
+//==================== 캔버스 ====================
+const cv=document.getElementById('game');
+const ctx=cv.getContext('2d');
+const view={scale:1, ox:0, oy:0};   // 월드(320x180) -> 버퍼 변환(레터박스)
+
+// 캔버스의 "표시 박스"가 어떤 모양이든(앱이 찌그러뜨려도) 그 안에
+// 320x180 월드를 비율 유지로 가운데 배치하고 남는 부분은 레터박스로 채운다.
+function syncCanvas(){
+  const r=cv.getBoundingClientRect();
+  if(r.width<2||r.height<2) return;
+  const dpr=Math.min(window.devicePixelRatio||1, 2);
+  const bw=Math.max(2,Math.round(r.width*dpr));
+  const bh=Math.max(2,Math.round(r.height*dpr));
+  if(cv.width!==bw)  cv.width=bw;    // 버퍼를 실제 박스 비율에 맞춰 → CSS 늘림 없음
+  if(cv.height!==bh) cv.height=bh;
+  view.scale=Math.min(cv.width/W, cv.height/H);
+  view.ox=Math.round((cv.width - W*view.scale)/2);
+  view.oy=Math.round((cv.height - H*view.scale)/2);
+  ctx.imageSmoothingEnabled=false;
+}
+// 가능하면 16:9 박스를 직접 지정(잘 동작하는 환경용). 안 먹혀도 syncCanvas가 보정.
+function fitCanvas(){
+  const maxH=Math.max(160, window.innerHeight*0.60);
+  let w=Math.min(window.innerWidth-16, 960);
+  let h=w*H/W;
+  if(h>maxH){ h=maxH; w=h*W/H; }
+  cv.style.width=Math.floor(w)+'px';
+  cv.style.height=Math.floor(h)+'px';
+  syncCanvas();
+}
+window.addEventListener('resize',fitCanvas);
+window.addEventListener('orientationchange',fitCanvas);
+if(window.ResizeObserver){ new ResizeObserver(syncCanvas).observe(cv); }
+
+// 지형(보이는 그림) + 충돌 마스크
+const tCanvas=document.createElement('canvas');
+tCanvas.width=W; tCanvas.height=H;
+const tctx=tCanvas.getContext('2d');
+let solid=new Uint8Array(W*H);
+
+function idx(x,y){return y*W+x;}
+function isSolid(x,y){
+  x=x|0; y=y|0;
+  if(x<0||x>=W) return false;   // 화면 밖 좌우 = 벽 아님(가장자리 처리는 별도)
+  if(y<0) return false;
+  if(y>=H) return false;        // 바닥 밖 = 허공
+  return solid[idx(x,y)]===1;
+}
+function clearTerrain(x,y,w,h){
+  tctx.clearRect(x,y,w,h);
+  for(let yy=y;yy<y+h;yy++){
+    if(yy<0||yy>=H)continue;
+    for(let xx=x;xx<x+w;xx++){
+      if(xx<0||xx>=W)continue;
+      solid[idx(xx,yy)]=0;
+    }
+  }
+}
+function fillTerrain(x,y,w,h,color){
+  tctx.fillStyle=color; tctx.fillRect(x,y,w,h);
+  for(let yy=y;yy<y+h;yy++){
+    if(yy<0||yy>=H)continue;
+    for(let xx=x;xx<x+w;xx++){
+      if(xx<0||xx>=W)continue;
+      solid[idx(xx,yy)]=1;
+    }
+  }
+}
+function clearCircle(cx,cy,r){
+  for(let yy=cy-r;yy<=cy+r;yy++){
+    for(let xx=cx-r;xx<=cx+r;xx++){
+      const dx=xx-cx,dy=yy-cy;
+      if(dx*dx+dy*dy<=r*r){
+        if(xx>=0&&xx<W&&yy>=0&&yy<H){
+          solid[idx(xx,yy)]=0;
+        }
+      }
+    }
+  }
+  tctx.save();
+  tctx.globalCompositeOperation='destination-out';
+  tctx.beginPath(); tctx.arc(cx,cy,r,0,Math.PI*2); tctx.fill();
+  tctx.restore();
+}
+
+//==================== 레벨 정의 ====================
+const DIRT='#7a4b2b', GRASS='#3f7d36', BRICK='#d8822f', ROCK='#5c5666';
+function ground(y){ fillTerrain(0,y,W,H-y,DIRT); fillTerrain(0,y,W,3,GRASS); }
+
+// 원작 Lemmings(1991) "Fun" 티어 레벨을 그대로 옮긴 것.
+// 레벨명 · 스킬 수 · 구출 목표 · 제한시간 · 생성속도는
+// RetroLemmini(github.com/Willicious/RetroLemmini) 의 원본 .rlv 데이터를 사용.
+// 320x180 엔진에 맞춰 지형은 각 레벨의 퍼즐 의도를 재현하도록 재구성.
+const LEVELS=[
+ {
+   name:"Just dig!",                 // 원작 Fun 1
+   blurb:"굴착가(DIG)로 발밑을 곧장 뚫어 아래 출구로 내려가세요.",
+   total:10, need:1, rate:50, time:300,
+   entrance:{x:160,y:24}, exit:{x:151,y:150,w:18,h:24},
+   skills:{digger:10},
+   build(){
+     // 두꺼운 흙 대지 — 곧장 파고 내려가면 출구
+     fillTerrain(0,55,W,H-55,DIRT);
+     fillTerrain(0,55,W,3,GRASS);
+   }
+ },
+ {
+   name:"Only floaters can survive this",   // 원작 Fun 2
+   blurb:"아주 높은 곳에서 떨어집니다. 낙하산(FLOAT)을 펴야만 살아남아요.",
+   total:10, need:1, rate:50, time:300,
+   entrance:{x:40,y:14}, exit:{x:250,y:146,w:16,h:24},
+   skills:{floater:10},
+   build(){
+     ground(165);   // 바닥까지 낙차 149px > 안전낙하(140) → 낙하산 필수
+   }
+ },
+ {
+   name:"Tailor-made for blockers",   // 원작 Fun 3
+   blurb:"양옆은 낭떠러지! 차단꾼(BLOCK)으로 막아 출구 쪽으로 모으세요.",
+   total:50, need:5, rate:50, time:300,
+   entrance:{x:120,y:34}, exit:{x:248,y:100,w:16,h:22},
+   skills:{blocker:10},
+   build(){
+     // 허공에 떠 있는 대지 — 왼쪽 끝으로 걸어 나가면 추락사
+     fillTerrain(40,120,232,12,DIRT);
+     fillTerrain(40,120,232,3,GRASS);
+   }
+ },
+ {
+   name:"Now use miners and climbers",   // 원작 Fun 4
+   blurb:"벽은 등반가(CLIMB)로 오르고, 대각굴(MINE) 하나로 길을 파 모두 내려보내세요.",
+   total:10, need:10, rate:1, time:300,
+   entrance:{x:30,y:100}, exit:{x:168,y:128,w:20,h:20},
+   skills:{climber:10, miner:1},
+   build(){
+     ground(175);                                       // 바닥
+     fillTerrain(0,120,70,55,DIRT); fillTerrain(0,120,70,3,GRASS); // 왼쪽 출발지대
+     fillTerrain(70,68,18,107,ROCK);                    // 등반할 벽
+     fillTerrain(88,68,132,107,DIRT);                   // 고원+흙 덩어리(대각굴로 관통)
+     fillTerrain(88,68,132,3,GRASS);
+   }
+ },
+ {
+   name:"You need bashers this time",   // 원작 Fun 5
+   blurb:"두꺼운 벽이 가로막아요. 수평굴(BASH)로 뚫고 지나가세요.",
+   total:50, need:5, rate:50, time:300,
+   entrance:{x:24,y:120}, exit:{x:290,y:146,w:16,h:24},
+   skills:{basher:50},
+   build(){
+     ground(150);
+     fillTerrain(150,70,34,80,ROCK);   // 두꺼운 벽
+   }
+ },
+ {
+   name:"A task for blockers and bombers",   // 원작 Fun 6
+   blurb:"양 끝은 낭떠러지! 차단꾼(BLOCK)으로 가두고, 폭파꾼(BOMB)으로 발판을 뚫어 아래 출구로 떨어뜨리세요.",
+   total:50, need:10, rate:50, time:300,
+   entrance:{x:160,y:30}, exit:{x:118,y:160,w:84,h:18},
+   skills:{bomber:5, blocker:5},
+   build(){
+     // 가운데 좁은 발판(천장). 양 끝으로 걸어나가면 허공으로 추락사.
+     fillTerrain(30,96,260,7,DIRT); fillTerrain(30,96,260,3,GRASS);
+   }
+ },
+ {
+   name:"Builders will help you here",   // 원작 Fun 7
+   blurb:"넓은 구덩이를 건설가(BUILD)로 다리를 놓아 건너세요.",
+   total:50, need:25, rate:50, time:300,
+   entrance:{x:30,y:120}, exit:{x:292,y:146,w:16,h:24},
+   skills:{builder:20},
+   build(){
+     ground(150);
+     clearTerrain(118,150,80,30);      // 넓은 구덩이
+     fillTerrain(116,150,3,30,DIRT);
+     fillTerrain(198,150,3,30,DIRT);
+   }
+ },
+ {
+   name:"Not as complicated as it looks",   // 원작 Fun 8
+   blurb:"모든 스킬을 20개씩! 작은 벽 하나만 넘으면 됩니다. 거의 전원(95/100) 구출.",
+   total:100, need:95, rate:88, time:300,
+   entrance:{x:24,y:120}, exit:{x:296,y:146,w:14,h:24},
+   skills:{climber:20,floater:20,bomber:20,blocker:20,builder:20,basher:20,miner:20,digger:20},
+   build(){
+     ground(150);
+     fillTerrain(152,92,14,58,ROCK);   // 작은 벽 하나
+   }
+ },
+ {
+   name:"We all fall down",   // 원작 Fun 13
+   blurb:"굴착가(DIG)로 수직 통로를 뚫으면 나머지가 줄지어 떨어집니다. 전원 구출!",
+   total:20, need:20, rate:1, time:180,
+   entrance:{x:160,y:18}, exit:{x:151,y:150,w:18,h:26},
+   skills:{digger:20},
+   build(){
+     fillTerrain(0,40,W,H-40,DIRT);
+     fillTerrain(0,40,W,3,GRASS);
+   }
+ }
+];
+
+//==================== 스킬 메타 ====================
+const SKILL_LIST=[
+  ['climber','등반','CLIMB'],
+  ['floater','낙하산','FLOAT'],
+  ['bomber','폭파','BOMB'],
+  ['blocker','차단','BLOCK'],
+  ['builder','건설','BUILD'],
+  ['basher','수평굴','BASH'],
+  ['miner','대각굴','MINE'],
+  ['digger','굴착','DIG'],
+];
+
+//==================== 상태 ====================
+let lvIndex=0, level, lemmings, counts, releaseRate, timeLeft, spawnedCount, savedCount, deadCount;
+let selectedSkill=null, paused=false, fastFwd=false, running=false;
+let spawnTimer=0, tickAcc=0, nuking=false, nukeTimer=0, gameOver=false;
+
+function startLevel(i){
+  lvIndex=i; level=LEVELS[i];
+  // 지형 리셋
+  tctx.clearRect(0,0,W,H);
+  solid=new Uint8Array(W*H);
+  level.build();
+
+  lemmings=[];
+  counts=Object.assign({},level.skills);
+  releaseRate=level.rate;
+  timeLeft=level.time;
+  spawnedCount=0; savedCount=0; deadCount=0;
+  selectedSkill=null; paused=false; fastFwd=false; nuking=false; nukeTimer=0;
+  spawnTimer=0; tickAcc=0; gameOver=false; running=true;
+  buildSkillUI();
+  hideOverlay();
+  updateHUD();
+}
+
+//==================== 레밍 ====================
+// state: WALK FALL CLIMB FLOAT BLOCK BUILD BASH MINE DIG BOMB SPLAT EXIT
+function spawnLemming(){
+  lemmings.push({
+    x:level.entrance.x, y:level.entrance.y, dir:1,
+    state:'FALL', fallDist:0, alive:true, saved:false,
+    isClimber:false, isFloater:false,
+    bricks:0, work:0, bombT:0, anim:0, flash:0
+  });
+  spawnedCount++;
+}
+
+function killLem(l, splat){
+  if(!l.alive) return;
+  l.alive=false; l.state=splat?'SPLAT':'GONE'; l.work=splat?12:0;
+  if(!splat) deadCount++; else deadCount++;
+}
+
+// 한 마리 물리 업데이트
+function updateLem(l){
+  if(!l.alive){
+    if(l.state==='SPLAT'){ l.work--; if(l.work<=0) l.dead=true; }
+    return;
+  }
+  l.anim++;
+
+  // 폭파 카운트다운(상태 무관, 부여되면 진행)
+  if(l.bombT>0){
+    if(l.anim%30===0){ // 1초마다(30tick)
+      l.bombT--;
+      if(l.bombT<=0){
+        clearCircle(l.x, l.y-3, 11);
+        l.alive=false; l.state='GONE'; l.dead=true; deadCount++;
+        return;
+      }
+    }
+  }
+
+  switch(l.state){
+    case 'WALK': stepWalk(l); break;
+    case 'FALL': stepFall(l); break;
+    case 'FLOAT': stepFloat(l); break;
+    case 'CLIMB': stepClimb(l); break;
+    case 'BLOCK': /* 가만히 서있음, 발밑 무너지면 낙하 */
+      if(!isSolid(l.x,l.y+1)){ l.state='FALL'; l.fallDist=0; }
+      break;
+    case 'BUILD': stepBuild(l); break;
+    case 'BASH': stepBash(l); break;
+    case 'MINE': stepMine(l); break;
+    case 'DIG': stepDig(l); break;
+  }
+
+  // 출구 도달 체크
+  if(l.alive){
+    const e=level.exit;
+    if(l.x>=e.x-2 && l.x<=e.x+e.w+2 && l.y>=e.y && l.y<=e.y+e.h+4){
+      l.alive=false; l.saved=true; l.state='GONE'; l.dead=true; savedCount++;
+    }
+  }
+}
+
+function supported(l){ return isSolid(l.x, l.y+1) || isSolid(l.x, l.y); }
+
+function stepFall(l){
+  l.y += GRAVITY_SPEED; l.fallDist += GRAVITY_SPEED;
+  // 낙하산 펴기
+  if(l.isFloater && l.fallDist>14){ l.state='FLOAT'; return; }
+  landCheck(l);
+}
+function stepFloat(l){
+  l.y += FLOAT_SPEED; l.fallDist += FLOAT_SPEED;
+  landCheckFloat(l);
+}
+function landCheck(l){
+  if(isSolid(l.x,l.y) || isSolid(l.x,l.y+1)){
+    while(isSolid(l.x,l.y)) l.y--;
+    if(l.fallDist>SAFE_FALL && !l.isFloater){ killLem(l,true); }
+    else { l.state='WALK'; l.fallDist=0; }
+  } else if(l.y>=H){ l.alive=false; l.state='GONE'; l.dead=true; deadCount++; }
+}
+function landCheckFloat(l){
+  if(isSolid(l.x,l.y) || isSolid(l.x,l.y+1)){
+    while(isSolid(l.x,l.y)) l.y--;
+    l.state='WALK'; l.fallDist=0;
+  } else if(l.y>=H){ l.alive=false; l.state='GONE'; l.dead=true; deadCount++; }
+}
+
+function blockedByBlocker(l,nx){
+  for(const b of lemmings){
+    if(b===l||!b.alive||b.state!=='BLOCK') continue;
+    if(Math.abs(b.y-l.y)<10 && Math.sign(b.x-l.x)===l.dir && Math.abs(b.x-l.x)<5){
+      return true;
+    }
+  }
+  return false;
+}
+
+function stepWalk(l){
+  // 발밑 지지 없으면 낙하
+  if(!isSolid(l.x,l.y+1)){
+    // 한 칸 내려갈 수 있는지(작은 단차)
+    let d=1; while(d<=MAX_DESC && !isSolid(l.x,l.y+1+d)) d++;
+    if(d<=MAX_DESC && isSolid(l.x,l.y+1+d)){ l.y+=d; }
+    else { l.state='FALL'; l.fallDist=0; return; }
+  }
+  // 차단꾼에 막히면 반대로
+  const nx=l.x+l.dir;
+  if(blockedByBlocker(l,nx)){ l.dir*=-1; return; }
+  // 화면 가장자리
+  if(nx<1||nx>=W-1){ l.dir*=-1; return; }
+
+  // 새 발 위치 탐색
+  let newY=null;
+  for(let dy=-MAX_STEP; dy<=MAX_DESC; dy++){
+    const yy=l.y+dy;
+    if(!isSolid(nx,yy) && isSolid(nx,yy+1)){ newY=yy; break; }
+  }
+  if(newY===null){
+    // 벽인지(위로 막힘) 절벽인지
+    if(isSolid(nx,l.y-MAX_STEP) || isSolid(nx,l.y)){
+      // 벽
+      if(l.isClimber){ l.state='CLIMB'; }
+      else l.dir*=-1;
+    } else {
+      // 절벽 → 걸어 나가 낙하
+      l.x=nx; l.state='FALL'; l.fallDist=0;
+    }
+  } else {
+    l.x=nx; l.y=newY;
+  }
+}
+
+function stepClimb(l){
+  // 옆 벽이 있는 동안 위로
+  const wallX=l.x+l.dir;
+  if(isSolid(wallX, l.y-LH+1)===false && !isSolid(wallX,l.y-2)){
+    // 벽 끝(머리 위 공간) → 정상 올라타기
+    if(!isSolid(l.x,l.y-1)){
+      l.y-=1; l.x+=l.dir; l.state='WALK'; return;
+    }
+  }
+  // 머리 위가 막혀있으면(천장) 떨어짐
+  if(isSolid(l.x,l.y-LH)){
+    l.dir*=-1; l.state='FALL'; l.fallDist=0; l.x-=l.dir; return;
+  }
+  if(isSolid(wallX,l.y-1) || isSolid(wallX,l.y-3)){
+    l.y-=1; // 계속 등반
+  } else {
+    // 벽이 끊김 → 정상에 올라섬
+    l.y-=1; l.x+=l.dir; l.state='WALK';
+  }
+  if(l.y<2){ l.state='WALK'; }
+}
+
+function stepBuild(l){
+  if(!supported(l)){ l.state='FALL'; l.fallDist=0; return; }
+  if(l.work>0){ l.work--; return; } // 벽돌 간 딜레이
+  if(l.bricks>=12){ l.state='WALK'; l.dir*=-1; return; } // 다 짓고 돌아섬
+  // 머리 앞이 막히면 중단
+  if(isSolid(l.x+l.dir*2, l.y-LH) || isSolid(l.x+l.dir, l.y-LH+1)){
+    l.state='WALK'; l.dir*=-1; return;
+  }
+  // 벽돌 놓기
+  const bx = l.dir>0 ? l.x : l.x-5;
+  fillTerrain(bx, l.y, 6, 2, BRICK);
+  l.bricks++;
+  l.x += l.dir*2; l.y -= 1;
+  l.work=4;
+}
+
+function hasTerrainAhead(l){
+  for(let dy=-LH+1; dy<=0; dy++){
+    if(isSolid(l.x+l.dir*2, l.y+dy)) return true;
+  }
+  return false;
+}
+function stepBash(l){
+  if(!isSolid(l.x,l.y+1)){ l.state='FALL'; l.fallDist=0; return; }
+  if(!hasTerrainAhead(l)){ l.state='WALK'; return; } // 뚫림
+  if(l.work>0){ l.work--; return; }
+  // 앞쪽 한 슬라이스 제거
+  const cx = l.dir>0 ? l.x : l.x-2;
+  clearTerrain(cx, l.y-LH+1, 3, LH, );
+  l.x += l.dir;
+  l.work=1;
+}
+function stepMine(l){
+  if(l.work>0){ l.work--; return; }
+  // 진행 방향(대각선 아래)에 흙이 남아있는지 확인 — 없으면 채굴 종료
+  let ahead=false;
+  for(let dy=-LH+2; dy<=2; dy++){ if(isSolid(l.x+l.dir, l.y+dy)){ ahead=true; break; } }
+  if(!ahead){
+    if(isSolid(l.x,l.y+1)) l.state='WALK';
+    else { l.state='FALL'; l.fallDist=0; }
+    return;
+  }
+  // 비스듬히 한 칸 파 내려감(45°): 몸 크기만큼만 제거해 따라오는 레밍이 경사로로 내려옴
+  const cx = l.dir>0 ? l.x-1 : l.x-3;
+  clearTerrain(cx, l.y-LH+2, 5, LH);
+  l.x += l.dir; l.y += 1;
+  l.work=1;
+  if(l.y>=H-2){ l.state='FALL'; l.fallDist=0; }
+}
+function stepDig(l){
+  if(l.work>0){ l.work--; return; }
+  // 발밑에 흙이 없으면 낙하 (한 칸 아래는 방금 판 자리이므로 두 칸까지 확인)
+  let dirt=false;
+  for(let dx=-2;dx<=2;dx++){ if(isSolid(l.x+dx,l.y+1)||isSolid(l.x+dx,l.y+2)) dirt=true; }
+  if(!dirt){ l.state='FALL'; l.fallDist=0; return; }
+  clearTerrain(l.x-3, l.y+1, 6, 2);
+  l.y += 1;
+  l.work=2;
+  if(l.y>=H-1){ l.alive=false; l.state='GONE'; l.dead=true; deadCount++; }
+}
+
+//==================== 스킬 부여 ====================
+function canAssign(l, skill){
+  if(!l.alive) return false;
+  switch(skill){
+    case 'climber': return !l.isClimber;
+    case 'floater': return !l.isFloater;
+    case 'bomber': return l.bombT===0;
+    case 'blocker': return (l.state==='WALK') && isSolid(l.x,l.y+1);
+    case 'builder': return l.state==='WALK';
+    case 'basher': return l.state==='WALK';
+    case 'miner': return l.state==='WALK' && isSolid(l.x,l.y+1);
+    case 'digger': return l.state==='WALK' && isSolid(l.x,l.y+1);
+  }
+  return false;
+}
+function assign(l, skill){
+  switch(skill){
+    case 'climber': l.isClimber=true; break;
+    case 'floater': l.isFloater=true; break;
+    case 'bomber': l.bombT=5; l.anim=0; break;
+    case 'blocker': l.state='BLOCK'; break;
+    case 'builder': l.state='BUILD'; l.bricks=0; l.work=0; break;
+    case 'basher': l.state='BASH'; l.work=0; break;
+    case 'miner': l.state='MINE'; l.work=0; break;
+    case 'digger': l.state='DIG'; l.work=0; break;
+  }
+}
+
+//==================== 입력 ====================
+function canvasToLogical(ev){
+  const r=cv.getBoundingClientRect();
+  const cssX=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left;
+  const cssY=(ev.touches?ev.touches[0].clientY:ev.clientY)-r.top;
+  // CSS px -> 버퍼 px -> 월드 px (레터박스 역변환)
+  const devX=cssX*(cv.width/r.width);
+  const devY=cssY*(cv.height/r.height);
+  return { x:(devX-view.ox)/view.scale, y:(devY-view.oy)/view.scale };
+}
+let lastTap=0;
+function handleTap(ev){
+  ev.preventDefault();
+  const now=(typeof performance!=='undefined'?performance.now():Date.now());
+  if(now-lastTap<320) return;   // touchstart 직후의 click 중복 방지
+  lastTap=now;
+  if(gameOver||!selectedSkill||counts[selectedSkill]<=0) return;
+  const p=canvasToLogical(ev);
+  // 가장 가까운 적합 레밍 (1차: 가까운 반경, 없으면 2차: 넓은 반경)
+  let best=null, bd=Infinity;
+  for(const l of lemmings){
+    if(!canAssign(l,selectedSkill)) continue;
+    const dx=l.x-p.x, dy=(l.y-LH/2)-p.y;
+    const d=dx*dx+dy*dy;
+    if(d<bd){ bd=d; best=l; }
+  }
+  const FALLBACK=90;
+  if(best && bd<=FALLBACK*FALLBACK){
+    assign(best,selectedSkill);
+    best.flash=14;                 // 부여 피드백(흰 링)
+    counts[selectedSkill]--;
+    if(counts[selectedSkill]<=0) selectedSkill=null;
+    buildSkillUI(); updateHUD();
+  }
+}
+cv.addEventListener('click',handleTap);
+cv.addEventListener('touchstart',handleTap,{passive:false});
+
+//==================== HUD / UI ====================
+const skillsEl=document.getElementById('skills');
+function buildSkillUI(){
+  skillsEl.innerHTML='';
+  for(const [key,nm] of SKILL_LIST){
+    const c=counts[key]||0;
+    const div=document.createElement('div');
+    div.className='sk'+(c<=0?' empty':'')+(selectedSkill===key?' on':'');
+    div.innerHTML=`<div class="nm">${nm}</div><div class="ct">${c}</div>`;
+    div.onclick=()=>{
+      if(c<=0) return;
+      selectedSkill = selectedSkill===key?null:key;
+      buildSkillUI();
+    };
+    skillsEl.appendChild(div);
+  }
+}
+function fmtTime(s){ s=Math.max(0,s|0); return (s/60|0)+':'+String(s%60).padStart(2,'0'); }
+function updateHUD(){
+  document.getElementById('sOut').textContent = spawnedCount - savedCount - deadCount;
+  document.getElementById('sIn').textContent = savedCount;
+  document.getElementById('sNeed').textContent = level.need;
+  document.getElementById('sTot').textContent = level.total;
+  document.getElementById('sTime').textContent = fmtTime(timeLeft);
+  document.getElementById('sRate').textContent = releaseRate;
+  document.getElementById('hint').textContent = selectedSkill
+    ? `선택: ${SKILL_LIST.find(s=>s[0]===selectedSkill)[1]} — 레밍을 탭하세요`
+    : level.name + ' · ' + level.blurb;
+}
+
+document.getElementById('bRateUp').onclick=()=>{ releaseRate=Math.min(99,releaseRate+5); updateHUD(); };
+document.getElementById('bRateDown').onclick=()=>{ releaseRate=Math.max(10,releaseRate-5); updateHUD(); };
+document.getElementById('bPause').onclick=(e)=>{ paused=!paused; e.target.textContent=paused?'재개':'일시정지'; };
+document.getElementById('bFF').onclick=(e)=>{ fastFwd=!fastFwd; e.target.style.borderColor=fastFwd?'#54d06e':''; };
+document.getElementById('bNuke').onclick=()=>{
+  if(gameOver) return;
+  nuking=true; nukeTimer=0;
+};
+
+//==================== 오버레이 ====================
+const ov=document.getElementById('overlay');
+function showOverlay(win){
+  running=false; gameOver=true;
+  const ok = savedCount>=level.need;
+  const last = lvIndex>=LEVELS.length-1;
+  ov.className='msg show '+(ok?'win':'lose');
+  let html=`<h2>${ok?'성공!':'실패'}</h2>`;
+  html+=`<p class="big">구출 ${savedCount} / 목표 ${level.need} (전체 ${level.total})</p>`;
+  if(ok && !last) html+=`<p>다음 레벨로 진행합니다.</p>`;
+  else if(ok && last) html+=`<p>모든 레벨을 완료했습니다. 훌륭해요!</p>`;
+  else html+=`<p>구출 인원이 부족했어요. 다시 시도해 보세요.</p>`;
+  let btn = ok ? (last?'처음부터':'다음 레벨') : '다시 시도';
+  html+=`<button id="ovBtn">${btn}</button>`;
+  ov.innerHTML=html;
+  document.getElementById('ovBtn').onclick=()=>{
+    if(ok && !last) startLevel(lvIndex+1);
+    else if(ok && last) startLevel(0);
+    else startLevel(lvIndex);
+  };
+}
+function hideOverlay(){ ov.className='msg'; ov.innerHTML=''; }
+
+//==================== 게임 루프 ====================
+function tick(){
+  // 시간
+  timeLeft -= 1/30;
+
+  // 폭파 가동
+  if(nuking){
+    nukeTimer++;
+    if(nukeTimer%3===0){
+      const target=lemmings.find(l=>l.alive && l.bombT===0);
+      if(target){ target.bombT=1; target.anim=29; }
+    }
+  }
+
+  // 생성
+  if(spawnedCount<level.total){
+    spawnTimer--;
+    if(spawnTimer<=0){
+      spawnLemming();
+      spawnTimer=Math.max(4, 105-releaseRate);
+    }
+  }
+
+  // 업데이트
+  for(const l of lemmings) updateLem(l);
+  // 정리
+  lemmings=lemmings.filter(l=> !l.dead);
+
+  // 종료 조건
+  const active = lemmings.some(l=>l.alive);
+  const allDone = spawnedCount>=level.total && !active;
+  if(allDone || timeLeft<=0){
+    showOverlay();
+    return;
+  }
+  updateHUD();
+}
+
+let lastT=performance.now();
+function loop(now){
+  requestAnimationFrame(loop);
+  const dt=now-lastT; lastT=now;
+  if(running && !paused && !gameOver){
+    tickAcc += dt * (fastFwd?3:1);
+    let guard=0;
+    while(tickAcc>=TICK && guard<8){
+      tick(); tickAcc-=TICK; guard++;
+      if(gameOver) break;
+    }
+  }
+  render();
+}
+
+//==================== 렌더 ====================
+function render(){
+  // 버퍼 전체를 레터박스 색으로 채운 뒤, 월드 좌표계로 변환
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle='#0a0f1e';
+  ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.setTransform(view.scale,0,0,view.scale,view.ox,view.oy);
+  // 월드 영역 밖 클리핑
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0,0,W,H); ctx.clip();
+
+  // 하늘
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#2b3f6e'); g.addColorStop(1,'#152544');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  // 지형
+  ctx.drawImage(tCanvas,0,0);
+
+  // 입구
+  const en=level.entrance;
+  ctx.fillStyle='#caa14a';
+  ctx.fillRect(en.x-7, en.y-12, 14, 8);
+  ctx.fillStyle='#7a5e1e';
+  ctx.fillRect(en.x-5, en.y-6, 10, 4);
+
+  // 출구
+  const e=level.exit;
+  ctx.fillStyle='#2c8b3f';
+  ctx.fillRect(e.x, e.y, e.w, e.h);
+  ctx.fillStyle='#7ff09a';
+  ctx.fillRect(e.x+3, e.y+e.h-6, e.w-6, 4);
+  ctx.fillStyle='#0c3017';
+  ctx.fillRect(e.x+e.w/2-3, e.y+2, 6, e.h-8);
+
+  // 레밍
+  for(const l of lemmings) drawLem(l);
+
+  // 폭파 카운트 표시
+  for(const l of lemmings){
+    if(l.alive && l.bombT>0){
+      ctx.fillStyle='#ffec5c';
+      ctx.font='6px monospace'; ctx.textAlign='center';
+      ctx.fillText(l.bombT, l.x, l.y-LH-1);
+    }
+  }
+  ctx.restore();
+}
+
+function drawLem(l){
+  const x=l.x|0, y=l.y|0;
+  // 부여 피드백: 흰 링
+  if(l.flash>0){
+    ctx.strokeStyle='rgba(255,255,255,'+(l.flash/14)+')';
+    ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(x, y-LH/2, 7, 0, Math.PI*2); ctx.stroke();
+    l.flash--;
+  }
+  if(l.state==='SPLAT'){
+    ctx.fillStyle='#c23b3b';
+    ctx.fillRect(x-3,y-1,7,2);
+    return;
+  }
+  if(!l.alive) return;
+  // 색: 머리(녹색), 몸(파랑)
+  let body = '#3fa9ff', hair='#54d06e';
+  if(l.state==='BLOCK'){ body='#ff8a3d'; }
+  if(l.bombT>0 && l.anim%2===0){ body='#ff5560'; }
+  // 몸통
+  ctx.fillStyle=body;
+  ctx.fillRect(x-1, y-LH+2, LWd-1, LH-2);
+  // 머리
+  ctx.fillStyle=hair;
+  ctx.fillRect(x-1, y-LH, LWd-1, 3);
+  // 얼굴
+  ctx.fillStyle='#ffd9b0';
+  ctx.fillRect(x-1+(l.dir>0?1:0), y-LH+3, 1, 1);
+
+  // 상태 표시 소품
+  if(l.state==='FLOAT'){
+    ctx.fillStyle='#ffe05c';
+    ctx.fillRect(x-3, y-LH-3, 7, 1);
+    ctx.fillRect(x-2,y-LH-2,1,1); ctx.fillRect(x+2,y-LH-2,1,1);
+  }
+  if(l.state==='BLOCK'){
+    ctx.fillStyle='#ffd9b0';
+    ctx.fillRect(x-2, y-LH+4, 1,1); ctx.fillRect(x+2, y-LH+4, 1,1);
+  }
+  if(l.state==='DIG'||l.state==='MINE'||l.state==='BASH'){
+    ctx.fillStyle='#dddddd';
+    ctx.fillRect(x+(l.dir>0?2:-3), y-3, 2,1);
+  }
+  if(l.state==='BUILD'){
+    ctx.fillStyle=BRICK;
+    ctx.fillRect(x+(l.dir>0?1:-4), y-2, 3,1);
+  }
+  if(l.isClimber && l.state!=='CLIMB'){
+    ctx.fillStyle='#ffd23f'; ctx.fillRect(x-1,y-LH-1,1,1);
+  }
+}
+
+//==================== 시작 ====================
+fitCanvas();
+try { startLevel(0); }
+catch(err){ console.error('init error', err); }
+requestAnimationFrame(loop);
+
+//==================== 디버그 훅(테스트용) ====================
+// 게임플레이에 영향 없음. 콘솔/자동화에서 레벨 검증용.
+window.__LEM = {
+  levels: LEVELS.length,
+  jump(i){ startLevel(i); return level.name; },
+  setFF(v){ fastFwd=!!v; },
+  step(n){ n=n||1; let c=0; for(let i=0;i<n && !gameOver;i++){ tick(); c++; } return c; }, // 동기 틱(테스트)
+  draw(){ render(); },   // 강제 렌더(테스트)
+  isSolid(x,y){ return isSolid(x,y); },
+  info(){ return {lv:lvIndex, name:level.name, need:level.need, total:level.total,
+    spawned:spawnedCount, saved:savedCount, dead:deadCount, over:gameOver,
+    exit:level.exit, entrance:level.entrance, counts:Object.assign({},counts)}; },
+  lems(){ return lemmings.filter(l=>l.alive).map(l=>({x:Math.round(l.x),y:Math.round(l.y),s:l.state,
+    dir:l.dir,cl:l.isClimber,fl:l.isFloater})); },
+  // 가장 가까운 적합 레밍에 스킬 부여(월드 좌표)
+  give(skill,x,y){
+    if(counts[skill]<=0) return 'no-charges';
+    let best=null,bd=Infinity;
+    for(const l of lemmings){ if(!canAssign(l,skill))continue;
+      const dx=l.x-x,dy=(l.y-LH/2)-y,d=dx*dx+dy*dy; if(d<bd){bd=d;best=l;} }
+    if(!best) return 'no-target';
+    assign(best,skill); counts[skill]--; updateHUD();
+    return {x:Math.round(best.x),y:Math.round(best.y)};
+  }
+};
+})();
+</script>
+</body>
+</html>
