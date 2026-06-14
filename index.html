@@ -853,6 +853,35 @@ function render(){
   ctx.restore();
 }
 
+//==================== 레밍 입체 캐릭터 렌더 ====================
+const PAL={
+  body:{b:'#3fa9ff',h:'#9fd6ff',s:'#2570b8'},   // 파란 몸 (하이라이트/그림자)
+  block:{b:'#ff8a3d',h:'#ffc491',s:'#c25e1e'},  // 차단꾼 주황
+  red:{b:'#ff5560',h:'#ffa6ab',s:'#bf2c36'},    // 폭파 임박 빨강
+  hair:{b:'#54d06e',h:'#9bf0ad',s:'#2f9a4e'},   // 녹색 머리카락
+  steel:{b:'#cdd2dd',h:'#f2f5fa',s:'#868d9d'},  // 강철(삽날/망치/곡괭이)
+  brick:{b:'#d8822f',h:'#f2b06a',s:'#a4561c'},
+  wood:'#8a5a2b', skin:'#ffd9b0', skinS:'#dcae84', foot:'#26304a'
+};
+// 입체감 있는 박스(상/좌 하이라이트, 하/우 그림자)
+function vbox(px,py,w,h,c){
+  px=Math.round(px); py=Math.round(py);
+  ctx.fillStyle=c.b; ctx.fillRect(px,py,w,h);
+  if(w>=2&&h>=2){
+    ctx.fillStyle=c.h; ctx.fillRect(px,py,w,1); ctx.fillRect(px,py,1,h);
+    ctx.fillStyle=c.s; ctx.fillRect(px,py+h-1,w,1); ctx.fillRect(px+w-1,py,1,h);
+  }
+}
+function dot(px,py,col){ ctx.fillStyle=col; ctx.fillRect(Math.round(px),Math.round(py),1,1); }
+// 어깨→손 사이를 잇는 팔(끝에 살색 손)
+function arm(sx,sy,hx,hy,col){
+  sx=Math.round(sx);sy=Math.round(sy);hx=Math.round(hx);hy=Math.round(hy);
+  ctx.fillStyle=col;
+  const dx=hx-sx, dy=hy-sy, n=Math.max(Math.abs(dx),Math.abs(dy))||1;
+  for(let i=0;i<n;i++){ ctx.fillRect(Math.round(sx+dx*i/n), Math.round(sy+dy*i/n),1,1); }
+  dot(hx,hy,PAL.skin);
+}
+
 function drawLem(l){
   // 전멸 연출(패배 확정 떨림) 또는 폭파 카운트다운 중에는 부들부들 떨림
   let jx=0, jy=0;
@@ -861,53 +890,103 @@ function drawLem(l){
     jy=(Math.random()<0.4?-1:0);
   }
   const x=(l.x|0)+jx, y=(l.y|0)+jy;
+  const f=l.dir>=0?1:-1, A=l.anim||0, st=l.state;
+
   // 부여 피드백: 흰 링
   if(l.flash>0){
     ctx.strokeStyle='rgba(255,255,255,'+(l.flash/14)+')';
     ctx.lineWidth=1;
-    ctx.beginPath(); ctx.arc(x, y-LH/2, 7, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y-5, 8, 0, Math.PI*2); ctx.stroke();
     l.flash--;
   }
-  if(l.state==='SPLAT'){
-    ctx.fillStyle='#c23b3b';
-    ctx.fillRect(x-3,y-1,7,2);
+  if(st==='SPLAT'){ // 납작하게 뭉개진 모습
+    ctx.fillStyle='#7a1f1f'; ctx.fillRect(x-4,y-1,9,2);
+    ctx.fillStyle='#c23b3b'; ctx.fillRect(x-3,y-1,6,1);
     return;
   }
   if(!l.alive) return;
-  // 색: 머리(녹색), 몸(파랑)
-  let body = '#3fa9ff', hair='#54d06e';
-  if(l.state==='BLOCK'){ body='#ff8a3d'; }
-  if(l.bombT>0 && l.anim%2===0){ body='#ff5560'; }
-  // 몸통
-  ctx.fillStyle=body;
-  ctx.fillRect(x-1, y-LH+2, LWd-1, LH-2);
-  // 머리
-  ctx.fillStyle=hair;
-  ctx.fillRect(x-1, y-LH, LWd-1, 3);
-  // 얼굴
-  ctx.fillStyle='#ffd9b0';
-  ctx.fillRect(x-1+(l.dir>0?1:0), y-LH+3, 1, 1);
 
-  // 상태 표시 소품
-  if(l.state==='FLOAT'){
-    ctx.fillStyle='#ffe05c';
-    ctx.fillRect(x-3, y-LH-3, 7, 1);
-    ctx.fillRect(x-2,y-LH-2,1,1); ctx.fillRect(x+2,y-LH-2,1,1);
+  const P = (st==='BLOCK')?PAL.block : (l.bombT>0 && A%2===0)?PAL.red : PAL.body;
+  const ph = Math.floor(A/4)%2;            // 보행 2프레임
+  const bob = (st==='WALK' && ph)? -1 : 0; // 걸을 때 상체 위아래
+  const ty = y+bob;                        // 상체 기준 y (발은 y 고정)
+  const shY = ty-6;                        // 어깨 높이
+  const sh = (st==='WALK') ? Math.round(Math.sin(A*0.5)*2) : 0;  // 팔/다리 스윙
+
+  // ---------- 뒷팔(몸통 뒤, 먼저) ----------
+  if(st==='WALK'){ arm(x-f, shY, x-f*1 - sh*f, shY+3, P.s); }
+  else if(st==='FALL'){ arm(x-f, shY, x-f*3, ty-9, PAL.skin); }
+  else if(st==='BLOCK'){ arm(x-f*2, shY, x-f*4, shY+1, PAL.skin); }
+
+  // ---------- 다리 ----------
+  if(st==='WALK'){
+    const a=ph?1:0, b=ph?0:1;
+    vbox(x-2, y-3, 2,3, P);  dot(x-2 + (a?f:0), y-1, PAL.foot);   // 뒷다리
+    vbox(x+0+f*a, y-3, 2,3, P); dot(x+1+f*a, y-1, PAL.foot);      // 앞다리
+  } else if(st==='BLOCK'){
+    vbox(x-3,y-3,2,3,P); vbox(x+1,y-3,2,3,P);
+    dot(x-3,y-1,PAL.foot); dot(x+2,y-1,PAL.foot);
+  } else if(st==='CLIMB'){
+    vbox(x-1,y-4,2,4,P); vbox(x+0,y-2,2,2,P);
+  } else {
+    vbox(x-2,y-3,2,3,P); vbox(x+0,y-3,2,3,P);
+    dot(x-2,y-1,PAL.foot); dot(x+1,y-1,PAL.foot);
   }
-  if(l.state==='BLOCK'){
-    ctx.fillStyle='#ffd9b0';
-    ctx.fillRect(x-2, y-LH+4, 1,1); ctx.fillRect(x+2, y-LH+4, 1,1);
-  }
-  if(l.state==='DIG'||l.state==='MINE'||l.state==='BASH'){
-    ctx.fillStyle='#dddddd';
-    ctx.fillRect(x+(l.dir>0?2:-3), y-3, 2,1);
-  }
-  if(l.state==='BUILD'){
-    ctx.fillStyle=BRICK;
-    ctx.fillRect(x+(l.dir>0?1:-4), y-2, 3,1);
-  }
-  if(l.isClimber && l.state!=='CLIMB'){
-    ctx.fillStyle='#ffd23f'; ctx.fillRect(x-1,y-LH-1,1,1);
+
+  // ---------- 몸통 ----------
+  vbox(x-2, ty-7, 5, 5, P);
+
+  // ---------- 머리 ----------
+  vbox(x-2, ty-10, 5, 3, PAL.hair);
+  dot(x-2 + (f>0?3:1), ty-9, PAL.skin);            // 얼굴(앞쪽)
+  dot(x-2 + (f>0?3:1), ty-8, PAL.skinS);
+  dot(x-2 + (f>0?4:0), ty-9, '#0c2233');           // 눈
+  if(l.isClimber && st!=='CLIMB'){ dot(x, ty-11, '#ffd23f'); }  // 등반가 표식
+
+  // ---------- 앞팔 / 도구 ----------
+  if(st==='DIG'){
+    // 삽질: 두 손으로 삽을 잡고 발밑을 푹푹
+    const thr=(A%6<3)?0:2;
+    arm(x+f, shY, x+f*2, y-3, PAL.skin);
+    ctx.fillStyle=PAL.wood;                         // 삽 자루
+    for(let i=0;i<5;i++) ctx.fillRect(x+f*2, ty-4+i, 1,1);
+    vbox(x+f*2-1, y+thr, 3,2, PAL.steel);           // 삽날(발밑)
+  } else if(st==='BUILD'){
+    // 망치질 + 벽돌 쌓기
+    const up=(A%8<4);
+    vbox(x+f*2, y-2, 4,2, PAL.brick);               // 앞에 놓는 벽돌
+    const hhx=x+f*(up?1:3), hhy=up?ty-11:y-4;
+    arm(x+f, shY, hhx, hhy, PAL.skin);
+    ctx.fillStyle=PAL.wood; ctx.fillRect(hhx, hhy, 1, up?3:2); // 자루
+    vbox(hhx-1, hhy-1, 3,2, PAL.steel);             // 망치 머리
+    if(!up) dot(x+f*2, y-3, '#fff7c0');             // 타격 불꽃
+  } else if(st==='BASH'){
+    // 곡괭이 수평 휘두르기
+    const sw=Math.round(Math.sin(A*0.7)*2);
+    arm(x+f, shY, x+f*(3+sw), y-4, PAL.skin);
+    vbox(x+f*(3+sw), y-5, 2,3, PAL.steel);
+    ctx.fillStyle=PAL.wood; ctx.fillRect(x+f*(2+sw), y-4,1,1);
+  } else if(st==='MINE'){
+    // 곡괭이 대각선 아래로
+    const sw=Math.round((Math.sin(A*0.7)+1));
+    arm(x+f, shY, x+f*(2+sw), y-2+sw, PAL.skin);
+    vbox(x+f*(2+sw), y-1+sw, 2,2, PAL.steel);
+  } else if(st==='BLOCK'){
+    arm(x+f*2, shY, x+f*4, shY+1, PAL.skin);
+    dot(x-2 + (f>0?3:1), ty-8, '#ffffff');          // 굳은 표정
+  } else if(st==='FLOAT'){
+    ctx.fillStyle=PAL.steel.b; // 낙하산 천
+    ctx.fillStyle='#ffe05c'; ctx.fillRect(x-4,ty-13,9,2);
+    dot(x-4,ty-12,'#e0b800'); dot(x+4,ty-12,'#e0b800');
+    arm(x-1,shY,x-3,ty-11,PAL.skin); arm(x+1,shY,x+3,ty-11,PAL.skin); // 줄 잡은 두 팔
+  } else if(st==='CLIMB'){
+    const u=ph?-1:0;
+    arm(x+f, shY, x+f*3, ty-9+u, PAL.skin);
+    arm(x+f, shY-2, x+f*3, ty-11+u, PAL.skin);
+  } else if(st==='FALL'){
+    arm(x+f, shY, x+f*3, ty-9, PAL.skin);
+  } else { // WALK
+    arm(x+f, shY, x+f*1 + sh*f, shY+3, PAL.skin);   // 앞팔 흔들기
   }
 }
 
@@ -926,6 +1005,46 @@ window.__LEM = {
   step(n){ n=n||1; let c=0; for(let i=0;i<n && !gameOver;i++){ tick(); c++; } return c; }, // 동기 틱(테스트)
   draw(){ render(); },   // 강제 렌더(테스트)
   nuke(){ nuking=true; nukeTimer=0; },   // 전체폭파 트리거(테스트)
+  poseTest(){   // 모든 동작 상태를 큰 해상도로 그려 PNG dataURL 반환(시각 검증)
+    const ow=cv.width, oh=cv.height;
+    cv.width=1120; cv.height=260;
+    ctx.imageSmoothingEnabled=false;
+    ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle='#10182e'; ctx.fillRect(0,0,cv.width,cv.height);
+    ctx.setTransform(7,0,0,7,8,4);
+    const states=['WALK','DIG','BUILD','BASH','MINE','BLOCK','FLOAT','CLIMB','FALL'];
+    let gx=10;
+    for(const s of states){
+      for(let fr=0;fr<3;fr++){ drawLem({x:gx, y:26, dir:1, state:s, alive:true, anim:fr*3+1, bombT:0, flash:0, isClimber:false, work:0}); gx+=10; }
+      ctx.fillStyle='#9fb0d0'; ctx.font='5px monospace'; ctx.textAlign='center'; ctx.fillText(s, gx-15, 33);
+      gx+=8;
+    }
+    const url=cv.toDataURL('image/png');
+    cv.width=ow; cv.height=oh; syncCanvas();
+    return url;
+  },
+  probe(state, anim){   // 한 마리를 그려 색상 히스토그램+손 위치 반환(픽셀 검증)
+    const S=8, fy=16;   // 발 y=16 → 머리(y-10)·낙하산까지 모두 캔버스 안
+    ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle='#000'; ctx.fillRect(0,0,200,200);
+    ctx.setTransform(S,0,0,S,0,0);
+    drawLem({x:8,y:fy,dir:1,state:state,alive:true,anim:(anim==null?1:anim),bombT:0,flash:0,isClimber:false,work:0});
+    const W2=18, H2=22, img=ctx.getImageData(0,0,W2*S,H2*S).data, cols={};
+    let handMaxX=-1;   // 가장 앞쪽(오른쪽) 손 위치 — 팔 스윙 측정
+    for(let p=0;p<img.length;p+=4){
+      if(img[p+3]<10) continue;
+      const r=img[p],g=img[p+1],b=img[p+2], k=r+','+g+','+b;
+      cols[k]=(cols[k]||0)+1;
+      if(r>240&&g>200&&g<230&&b>150&&b<190){ const px=((p/4)%(W2*S))/S; if(px>handMaxX)handMaxX=px; }
+    }
+    const has=(rr,gg,bb,tol)=>Object.keys(cols).some(k=>{const c=k.split(',');return Math.abs(c[0]-rr)<tol&&Math.abs(c[1]-gg)<tol&&Math.abs(c[2]-bb)<tol;});
+    // 강철은 밝은/중간/어두운 3톤 중 아무거나
+    const steel=has(205,210,221,20)||has(242,245,250,18)||has(134,141,157,20);
+    return {
+      state, anim:(anim==null?1:anim),
+      hasBlue: has(63,169,255,45), hasGreen: has(84,208,110,45),
+      hasSteel: steel, hasBrick: has(216,130,47,35), hasWood: has(138,90,43,30),
+      handFrontX: Math.round(handMaxX*10)/10
+    };
+  },
   isSolid(x,y){ return isSolid(x,y); },
   info(){ return {lv:lvIndex, name:level.name, need:level.need, total:level.total,
     spawned:spawnedCount, saved:savedCount, dead:deadCount, over:gameOver,
